@@ -59,7 +59,6 @@ init() {
     CIRCUITPYTHON_LIB_URL="https://github.com/adafruit/Adafruit_CircuitPython_Bundle/releases/download/$(echo "$CIRCUITPYTHON_LIB_VERSION" | cut -d- -f6)/$CIRCUITPYTHON_LIB_VERSION.zip"
     DRIVE_SOURCE="$PROJECT_DIR/drive"
     mkdir -p "$DRIVE_SOURCE/lib"
-    ln -sf "$PROJECT_DIR/mymk" "$DRIVE_SOURCE/"
 }
 
 get_drive() {
@@ -128,7 +127,18 @@ EOF
         esac
     done
     echo "Renaming the drive requires you to enter your password."
-    sudo mlabel -i "$(df "$DRIVE" | tail -1 | cut -d" " -f1)" ::"KEYBOARD${SUFFIX:-}"
+    DEVICE=$(df "$DRIVE" | tail -1 | cut -d" " -f1)
+    MOUNT_DIR=$(dirname "$DRIVE")
+    NAME="KEYBOARD${SUFFIX:-}"
+    sudo umount "$DEVICE"
+    sudo dosfslabel "$DEVICE" "$NAME"
+    DRIVE="$MOUNT_DIR/$NAME"
+    echo -n "Please reset the device"
+    while [ ! -e "$DRIVE" ]; do
+        echo -n "."
+        sleep 2
+    done
+    echo "OK"
     sudo chown -R "$(whoami):$(groups | cut -d ' ' -f1)" "$DRIVE"
 }
 
@@ -148,6 +158,7 @@ get_libs() {
     fi
     lib_list=(
         "adafruit_hid"
+        "adafruit_logging"
         "neopixel"
     )
     # Copying the libs will trigger an auto-reload
@@ -163,7 +174,7 @@ get_libs() {
 
 sync_drive() {
     if [ $(
-        rsync --checksum --copy-links --delete --dry-run --recursive --verbose \
+        rsync --checksum --copy-links --dry-run --recursive --verbose \
         "$DRIVE_SOURCE/" "$DRIVE" | wc -l
         ) != "4" ]; then
         echo -n "[$(date +"%H:%M:%S")] Install to drive: "
