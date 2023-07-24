@@ -1,4 +1,4 @@
-#/bin/bash
+#!/bin/bash
 set -o errexit
 set -o nounset
 set -o pipefail
@@ -51,7 +51,7 @@ parse_args(){
 }
 
 init() {
-    CIRCUITPYTHON_VERSION="8.1.0"
+    CIRCUITPYTHON_VERSION="8.2.0"
     board="sparkfun_pro_micro_rp2040"
     CIRCUITPYTHON_URL="https://downloads.circuitpython.org/bin/$board/en_US/adafruit-circuitpython-$board-en_US-$CIRCUITPYTHON_VERSION.uf2"
     DATE=$(curl -w "%{url_effective}" -I -L -o /dev/null -s -S "https://github.com/adafruit/Adafruit_CircuitPython_Bundle/releases/latest" | sed 's:.*/::')
@@ -61,33 +61,20 @@ init() {
     mkdir -p "$DRIVE_SOURCE/lib"
 }
 
-get_drive() {
-    unset DRIVE
-    DRIVE=$(df | sed "s:.* ::" | grep --extended-regexp "CIRCUITPY|KEYBOARD|RPI-RP2" || true)
+get_drives() {
+    unset DRIVES
+    readarray -t DRIVES < <(df | sed "s:.* ::" | sort | grep --extended-regexp "CIRCUITPY|KEYBOARD|RPI-RP2" || true)
 }
 
-wait_for_drive() {
+wait_for_drives() {
     echo -n "[$(date +"%H:%M:%S")] Connect MCU: "
-    unset DRIVE
-    while [ -z "${DRIVE:-}" ]; do 
+    unset DRIVES
+    while [ -z "${DRIVES:-}" ]; do
         echo -n "."
         sleep 1
-        get_drive
+        get_drives
     done
-    echo "OK ($DRIVE)"
-    if [ "$(basename "${DRIVE}")" = "RPI-RP2" ]; then
-        install_circuitpython
-    fi
-    if [ "$(basename "${DRIVE:-RPI-RP2}")" = "CIRCUITPY" ]; then
-        rename_drive
-    fi
-
-    # Make sure the drive is mounted with noatime, other just reading
-    # a file will trigger an auto-reload
-    if ! grep "${DRIVE}" "/etc/mtab" | grep -q noatime; then
-        echo "Password is required to remount the drive with the right options"
-        sudo mount -o remount,noatime "${DRIVE}"
-    fi
+    echo "OK (${DRIVES[*]})"
 }
 
 install_circuitpython() {
@@ -98,7 +85,7 @@ install_circuitpython() {
     while [ "$(basename "${DRIVE:-RPI-RP2}")" = "RPI-RP2" ]; do
         echo -n "."
         sleep 1
-        get_drive
+        get_drives
     done
     echo "OK"
 }
@@ -158,6 +145,7 @@ get_libs() {
     fi
     lib_list=(
         "adafruit_hid"
+        "adafruit_itertools"
         "adafruit_logging"
         "neopixel"
     )
@@ -172,25 +160,42 @@ get_libs() {
     echo "OK"
 }
 
-sync_drive() {
-    if [ $(
-        rsync --checksum --copy-links --dry-run --recursive --verbose \
-        "$DRIVE_SOURCE/" "$DRIVE" | wc -l
-        ) != "4" ]; then
-        echo -n "[$(date +"%H:%M:%S")] Install to drive: "
-        rsync --archive --copy-links --delete "$DRIVE_SOURCE/" "$DRIVE"
-        sync
-        echo "OK"
-        tput bel
-    fi
+sync_drives() {
+    for DRIVE in "${DRIVES[@]}"; do
+        if [ "$(
+            rsync --checksum --copy-links --dry-run --recursive --verbose \
+            "$DRIVE_SOURCE/" "$DRIVE" | wc -l
+            )" != "4" ]; then
+            echo -n "[$(date +"%H:%M:%S")] Install to $DRIVE: "
+            rsync --archive --copy-links --delete "$DRIVE_SOURCE/" "$DRIVE"
+            sync
+            echo "OK"
+            tput bel
+        fi
+    done
 }
 
 install_layout() {
     ln -sf "$LAYOUT" "$DRIVE_SOURCE/code.py"
 }
 
-install_drive() {
-    wait_for_drive
+install_drives() {
+    wait_for_drives
+    for DRIVE in "${DRIVES[@]}"; do
+        if [ "$(basename "${DRIVE}")" = "RPI-RP2" ]; then
+            install_circuitpython
+        fi
+        if [ "$(basename "${DRIVE:-RPI-RP2}")" = "CIRCUITPY" ]; then
+            rename_drive
+        fi
+
+        # Make sure the drive is mounted with noatime, other just reading
+        # a file will trigger an auto-reload
+        if ! grep "${DRIVE}" "/etc/mtab" | grep -q noatime; then
+            echo "Password is required to remount the drive with the right options"
+            sudo mount -o remount,noatime "${DRIVE}"
+        fi
+    done
 }
 
 parse_args "$@"
@@ -199,17 +204,17 @@ if [ -z "${FAST_MODE:-}" ]; then
     get_libs
 fi
 if [ -z "${DEV_MODE:-}" ]; then
-    install_drive
     install_layout
-    sync_drive
+    install_drives
+    sync_drives
 else
     while true; do
-        install_drive
         install_layout
-        while [ -n "${DRIVE:-}" ]; do
-            sync_drive
+        install_drives
+        while [ -n "${DRIVES:-}" ]; do
+            sync_drives
             sleep 1 || exit 0
-            get_drive || true
+            get_drives || true
         done
     done
 fi
